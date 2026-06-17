@@ -11,6 +11,9 @@ type Todo = {
 type TodoProps = {
   todo: Todo;
 };
+type TodoListProps = {
+  todos: Todo[];
+};
 
 // In-memory "database"
 let todos = [
@@ -40,6 +43,14 @@ const TodoItem = ({ todo }: TodoProps) => (
       Delete
     </button>
   </li>
+);
+
+const TodoListItems = ({ todos }: TodoListProps) => (
+  <>
+    {todos.map((todo) => (
+      <TodoItem todo={todo} />
+    ))}
+  </>
 );
 
 // Layout Component
@@ -73,15 +84,52 @@ app.get("/", (c) =>
           Add
         </button>
       </form>
+      <div>
+        <button
+          class="bg-blue-500 text-white p-2 mx-0"
+          hx-get="/todos"
+          hx-target="#todo-list"
+          hx-swap="innerHTML"
+        >
+          All
+        </button>
+        <button
+          class="bg-blue-500 text-white p-2 mx-1"
+          hx-get="/todos?filter=done"
+          hx-target="#todo-list"
+          hx-swap="innerHTML"
+        >
+          Done
+        </button>
+        <button
+          class="bg-blue-500 text-white p-2 mx-0"
+          hx-get="/todos?filter=undone"
+          hx-target="#todo-list"
+          hx-swap="innerHTML"
+        >
+          Undone
+        </button>
+      </div>
       <ul id="todo-list" class="mb-4">
-        {todos.map((todo) => (
-          <TodoItem todo={todo} />
-        ))}
+        <TodoListItems todos={todos} />
       </ul>
     </Layout>,
   ),
 );
 
+app.get("/todos", (c) => {
+  const filter = c.req.query("filter");
+
+  if (filter === "done") {
+    return c.html(<TodoListItems todos={todos.filter((todo) => todo.isDone)} />);
+  }
+
+  if (filter === "undone") {
+    return c.html(<TodoListItems todos={todos.filter((todo) => !todo.isDone)} />);
+  }
+
+  return c.html(<TodoListItems todos={todos} />);
+});
 
 app.delete("/delete/:id", (c) => {
   const id = parseInt(c.req.param("id"));
