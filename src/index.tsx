@@ -14,6 +14,7 @@ type TodoListProps = {
 const TodoItem = ({ todo }: TodoProps) => (
   <li id={`todo-${todo.id}`} class="flex gap-2 mb-2 items-center">
     <input
+      id={`todo-checkbox-${todo.id}`}
       type="checkbox"
       name="isDone"
       value="true"
@@ -23,7 +24,9 @@ const TodoItem = ({ todo }: TodoProps) => (
       hx-target="closest li"
       hx-swap="outerHTML"
     />
-    <span class={`${todo.isDone ? "line-through" : ""}`}>{todo.text}</span>
+    <label for={`todo-checkbox-${todo.id}`} class={`${todo.isDone ? "line-through" : ""}`}>
+      {todo.text}
+    </label>
     <button
       hx-delete={`/delete/${todo.id}`}
       hx-target={`#todo-${todo.id}`}
