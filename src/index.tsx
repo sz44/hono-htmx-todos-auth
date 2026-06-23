@@ -1,25 +1,15 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
+import { createTodo, deleteTodo, getTodos, type Todo, updateTodoDone } from "./db";
 
 const app = new Hono();
 
-type Todo = {
-  id: number;
-  text: string;
-  isDone: boolean;
-};
 type TodoProps = {
   todo: Todo;
 };
 type TodoListProps = {
   todos: Todo[];
 };
-
-// In-memory "database"
-let todos = [
-  { id: 1, text: "Learn Hono", isDone: false },
-  { id: 2, text: "Learn HTMX", isDone: true },
-];
 
 const TodoItem = ({ todo }: TodoProps) => (
   <li id={`todo-${todo.id}`} class="flex gap-2 mb-2 items-center">
@@ -111,7 +101,7 @@ app.get("/", (c) =>
         </button>
       </div>
       <ul id="todo-list" class="mb-4">
-        <TodoListItems todos={todos} />
+        <TodoListItems todos={getTodos()} />
       </ul>
     </Layout>,
   ),
@@ -120,20 +110,12 @@ app.get("/", (c) =>
 app.get("/todos", (c) => {
   const filter = c.req.query("filter");
 
-  if (filter === "done") {
-    return c.html(<TodoListItems todos={todos.filter((todo) => todo.isDone)} />);
-  }
-
-  if (filter === "undone") {
-    return c.html(<TodoListItems todos={todos.filter((todo) => !todo.isDone)} />);
-  }
-
-  return c.html(<TodoListItems todos={todos} />);
+  return c.html(<TodoListItems todos={getTodos(filter)} />);
 });
 
 app.delete("/delete/:id", (c) => {
   const id = parseInt(c.req.param("id"));
-  todos = todos.filter((t) => t.id !== id);
+  deleteTodo(id);
 
   // Returning an empty body tells HTMX to proceed with the swap="delete"
   return c.body(null, 200);
@@ -142,13 +124,11 @@ app.delete("/delete/:id", (c) => {
 app.patch("/todos/:id", async (c) => {
   const id = parseInt(c.req.param("id"));
   const body = await c.req.parseBody();
-  const todo = todos.find((t) => t.id === id);
+  const todo = updateTodoDone(id, body["isDone"] === "true");
 
   if (!todo) {
     return c.notFound();
   }
-
-  todo.isDone = body["isDone"] === "true";
 
   return c.html(TodoItem({ todo }));
 });
@@ -157,8 +137,7 @@ app.patch("/todos/:id", async (c) => {
 app.post("/add", async (c) => {
   const body = await c.req.parseBody();
   const text = body["todo"] as string;
-  const newTodo = { id: Date.now(), text, isDone: false };
-  todos.push(newTodo);
+  const newTodo = createTodo(text);
 
   // Return only the new fragment to be swapped into the list
   return c.html(TodoItem({ todo: newTodo }));

@@ -1,2 +1,7 @@
 # deps
 node_modules/
+
+# local database
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
