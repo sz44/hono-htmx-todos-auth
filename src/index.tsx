@@ -1,11 +1,12 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import { setCookie } from "hono/cookie";
 import { html } from "hono/html";
-import { createTodo, deleteTodo, getTodos, type Todo, updateTodoDone } from "./db";
+import { type Todo, createSession, addUser, createTodo, deleteTodo, findUserByEmail, getTodos, updateTodoDone } from "./db";
 
 const app = new Hono();
 
 type TodoProps = {
-  todo: Todo;
+todo: Todo;
 };
 type TodoListProps = {
   todos: Todo[];
@@ -61,8 +62,47 @@ const Layout = (props: { children: any }) => html`
   </html>
 `;
 
+app.get("/", c => 
+  c.html(
+    <Layout>
+      <h1 class="text-2xl font-bold mb-4"> Sign In </h1>
+      <form
+        hx-post="/signin"
+      >
+        <input type="email" name="email" class="border p-2" placeholder="email" required />
+        <input type="password" name="password" class="border p-2" placeholder="password" required />
+        <button type="submit" class="bg-blue-500 text-white p-2">
+          continue
+        </button>
+      </form>
+      <div>
+        <span>no account? <a href="/signup-email">sign up</a></span>
+      </div>
+    </Layout>
+  )
+)
+
+app.get("/signup-email", c => 
+  c.html(
+    <Layout>
+      <h1 class="text-2xl font-bold mb-4"> Sign Up </h1>
+      <form
+        hx-post="/auth/signup-email"
+      >
+        <input type="email" name="email" class="border p-2" placeholder="email" required />
+        <input type="password" name="password" class="border p-2" placeholder="password" required />
+        <button type="submit" class="bg-blue-500 text-white p-2">
+          continue
+        </button>
+      </form>
+      <div>
+        <span>have an account? <a href="/">sign in</a></span>
+      </div>
+    </Layout>
+  )
+)
 // Initial Page Load
-app.get("/", (c) =>
+app.get("/app", (c) =>
   c.html(
     <Layout>
       <h1 class="text-2xl font-bold mb-4"> My Todos </h1>
@@ -145,5 +185,49 @@ app.post("/add", async (c) => {
   // Return only the new fragment to be swapped into the list
   return c.html(TodoItem({ todo: newTodo }));
 });
+
+const signupEmail = async (c: Context) => {
+  const body = await c.req.parseBody();
+  const email = body["email"];
+  const password = body["password"];
+
+  if (typeof email !== "string" || typeof password !== "string") {
+    return c.html("invalid signup details", 400);
+  }
+
+  const user = createUser(email, password);
+  if (user.id === "") return c.html("user exists error", 409);
+
+  const session = await createSession(user.id);
+
+  setCookie(c, "session", session.token, {
+    httpOnly: true,
+    path: "/",
+    sameSite: "Lax",
+    secure: new URL(c.req.url).protocol === "https:",
+  });
+
+  if (c.req.header("HX-Request")) {
+    c.header("HX-Redirect", "/app");
+    return c.body(null, 204);
+  }
+
+  return c.redirect("/app");
+};
+
+app.post("/auth/signup-email", signupEmail);
+app.post("/auth/sighup-email", signupEmail);
+
+// console.log(findUserByEmail("a@gmail.com"));
+
+function createUser(email:string, password:string) {
+  const user = findUserByEmail(email);
+  if (user) {
+    return {id:"",email:""}; 
+  }
+
+  const res = addUser(email, password);
+  return res;
+}
 
 export default app;

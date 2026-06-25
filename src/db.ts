@@ -14,7 +14,7 @@ type TodoRow = {
 
 const db = new Database("todos.db", { create: true });
 
-db.exec(await Bun.file("schema.sql").text());
+db.run(await Bun.file("schema.sql").text());
 
 const seedCount = db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM todos").get();
 
@@ -72,3 +72,76 @@ export const updateTodoDone = (id: number, isDone: boolean): Todo | undefined =>
 export const deleteTodo = (id: number) => {
   db.query("DELETE FROM todos WHERE id = ?").run(id);
 };
+
+export const findUserByEmail = (email: string) => {
+  const res = db
+    .query("SELECT 1 FROM users WHERE email = ? LIMIT 1")
+    .get(email);
+
+  // If res is not null/undefined, the user exists
+  return res !== null; 
+};
+
+export const addUser = (email: string, password: string) => {
+  const id = generateSecureRandomString();
+  const hash = Bun.password.hashSync(password);
+  const result = db
+    .query("INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)")
+    .run(id, email, hash);
+  return {
+    // cound have used Number(result.lastInsertRowid)
+    id: id, email,
+  };
+}
+
+
+function generateSecureRandomString(): string {
+	// Human readable alphabet (a-z, 0-9 without l, o, 0, 1 to avoid confusion)
+	const alphabet = "abcdefghijkmnpqrstuvwxyz23456789";
+
+	// Generate 24 bytes = 192 bits of entropy.
+	// We're only going to use 5 bits per byte so the total entropy will be 192 * 5 / 8 = 120 bits
+	const bytes = new Uint8Array(24);
+	crypto.getRandomValues(bytes);
+
+	let id = "";
+	for (let i = 0; i < bytes.length; i++) {
+		// >> 3 "removes" the right-most 3 bits of the byte
+		id += alphabet[bytes[i] >> 3];
+	}
+	return id;
+}
+
+export async function createSession(userId: string) {
+	const now = new Date();
+
+	const id = generateSecureRandomString();
+	const secret = generateSecureRandomString();
+  const secretHash = Bun.password.hashSync(secret);
+	const token = id + "." + secret;
+
+	const session: SessionWithToken = {
+		id,
+    userId,
+		secretHash,
+		createdAt: now,
+    token
+	};
+
+  const result = db
+    .query("INSERT INTO sessions (id, user_id, secret_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(id, userId, secretHash, Math.floor(session.createdAt.getTime() / 1000));
+
+	return session;
+}
+
+type Session = {
+  id: string
+  userId: string
+  secretHash:string
+  createdAt: Date
+}
+
+type SessionWithToken = Session & {
+  token:string
+}
