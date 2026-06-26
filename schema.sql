@@ -1,14 +1,15 @@
-CREATE TABLE IF NOT EXISTS todos (
-  id INTEGER PRIMARY KEY,
-  text TEXT NOT NULL,
-  is_done INTEGER NOT NULL DEFAULT 0 CHECK (is_done IN (0, 1)),
-  created_at INTEGER NOT NULL DEFAULT (unixepoch())
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS users(
   id TEXT NOT NULL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS todos (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  is_done INTEGER NOT NULL DEFAULT 0 CHECK (is_done IN (0, 1)),
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 ) STRICT;
 
@@ -18,4 +19,3 @@ CREATE TABLE IF NOT EXISTS sessions (
 	secret_hash TEXT NOT NULL, 
 	created_at INTEGER NOT NULL
 ) STRICT;
- 

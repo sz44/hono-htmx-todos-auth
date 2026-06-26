@@ -2,18 +2,17 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { html } from "hono/html";
 import {
+  type Session,
   type Todo,
-  createSession,
   addUser,
+  checkEmailPassword,
+  createSession,
   createTodo,
+  deleteSession,
   deleteTodo,
-  findUserByEmail,
   getTodos,
   updateTodoDone,
-  getSession,
-  deleteSession,
   validateSessionToken,
-  checkEmailPassword,
 } from "./db";
 
 const app = new Hono();
@@ -21,8 +20,14 @@ const app = new Hono();
 type TodoProps = {
   todo: Todo;
 };
+
 type TodoListProps = {
   todos: Todo[];
+};
+
+type Credentials = {
+  email: string;
+  password: string;
 };
 
 const TodoItem = ({ todo }: TodoProps) => (
@@ -60,7 +65,6 @@ const TodoListItems = ({ todos }: TodoListProps) => (
   </>
 );
 
-// Layout Component
 const Layout = (props: { children: any }) => html`
   <!DOCTYPE html>
   <html>
@@ -78,7 +82,7 @@ const Layout = (props: { children: any }) => html`
 app.get("/", (c) =>
   c.html(
     <Layout>
-      <h1 class="text-2xl font-bold mb-4"> Sign In </h1>
+      <h1 class="text-2xl font-bold mb-4">Sign In</h1>
       <form hx-post="/signin">
         <input type="email" name="email" class="border p-2" placeholder="email" required />
         <input type="password" name="password" class="border p-2" placeholder="password" required />
@@ -98,7 +102,7 @@ app.get("/", (c) =>
 app.get("/signup-email", (c) =>
   c.html(
     <Layout>
-      <h1 class="text-2xl font-bold mb-4"> Sign Up </h1>
+      <h1 class="text-2xl font-bold mb-4">Sign Up</h1>
       <form hx-post="/auth/signup-email">
         <input type="email" name="email" class="border p-2" placeholder="email" required />
         <input type="password" name="password" class="border p-2" placeholder="password" required />
@@ -114,19 +118,17 @@ app.get("/signup-email", (c) =>
     </Layout>,
   ),
 );
-// Initial Page Load
-app.get("/app", (c) => {
 
-  const token = getCookie(c, "session");
-  if (!token) {
+app.get("/app", (c) => {
+  const session = getAuthenticatedSession(c);
+
+  if (!session) {
     return c.redirect("/");
   }
-  const session = validateSessionToken(token);
-  if (!session) return c.redirect("/");
 
   return c.html(
     <Layout>
-      <h1 class="text-2xl font-bold mb-4"> My Todos </h1>
+      <h1 class="text-2xl font-bold mb-4">My Todos</h1>
       <h2>user: {session.userId}</h2>
       <button hx-post="/signout">sign out</button>
       <form
@@ -135,7 +137,7 @@ app.get("/app", (c) => {
         hx-swap="beforeend"
         hx-on-htmx-after-request="if(event.detail.successful) this.reset()"
       >
-        <input name="todo" class="border p-2" placeholder="New todo..." required />
+        <input name="todo" class="border p-2" placeholder="New todo..." maxlength="500" required />
         <button type="submit" class="bg-blue-500 text-white p-2">
           Add
         </button>
@@ -162,30 +164,65 @@ app.get("/app", (c) => {
         </button>
       </div>
       <ul id="todo-list" class="mb-4">
-        <TodoListItems todos={getTodos()} />
+        <TodoListItems todos={getTodos(session.userId)} />
       </ul>
     </Layout>,
   );
 });
 
 app.get("/todos", (c) => {
-  const filter = c.req.query("filter");
+  const session = getAuthenticatedSession(c);
 
-  return c.html(<TodoListItems todos={getTodos(filter)} />);
+  if (!session) {
+    return redirectToSignin(c);
+  }
+
+  const filter = normalizeTodoFilter(c.req.query("filter"));
+
+  return c.html(<TodoListItems todos={getTodos(session.userId, filter)} />);
 });
 
 app.delete("/delete/:id", (c) => {
-  const id = parseInt(c.req.param("id"));
-  deleteTodo(id);
+  const session = getAuthenticatedSession(c);
 
-  // Returning an empty body tells HTMX to proceed with the swap="delete"
+  if (!session) {
+    return redirectToSignin(c);
+  }
+
+  if (!isHtmxRequest(c)) {
+    return c.text("HTMX request required", 400);
+  }
+
+  const id = parseTodoId(c.req.param("id"));
+
+  if (id === null) {
+    return c.text("Invalid todo id", 400);
+  }
+
+  deleteTodo(session.userId, id);
+
   return c.body(null, 200);
 });
 
 app.patch("/todos/:id", async (c) => {
-  const id = parseInt(c.req.param("id"));
+  const session = getAuthenticatedSession(c);
+
+  if (!session) {
+    return redirectToSignin(c);
+  }
+
+  if (!isHtmxRequest(c)) {
+    return c.text("HTMX request required", 400);
+  }
+
+  const id = parseTodoId(c.req.param("id"));
+
+  if (id === null) {
+    return c.text("Invalid todo id", 400);
+  }
+
   const body = await c.req.parseBody();
-  const todo = updateTodoDone(id, body["isDone"] === "true");
+  const todo = updateTodoDone(session.userId, id, body["isDone"] === "true");
 
   if (!todo) {
     return c.notFound();
@@ -194,112 +231,192 @@ app.patch("/todos/:id", async (c) => {
   return c.html(TodoItem({ todo }));
 });
 
-const signinEmail = async (c: Context) => {
-  const body = await c.req.parseBody();
-  const email = body["email"];
-  const password = body["password"];
+app.post("/signin", async (c) => {
+  const credentials = await parseCredentials(c, "signin");
 
-  if (typeof email !== "string" || typeof password !== "string") {
-    return c.html("invalid signin details", 400);
+  if (!credentials.ok) {
+    return credentials.response;
   }
 
-  const user = checkEmailPassword(email, password);
-  if (!user) return c.html("credential error", 409);
+  const user = checkEmailPassword(credentials.value.email, credentials.value.password);
 
-  const session = await createSession(user.id);
-
-  setCookie(c, "session", session.token, {
-    httpOnly: true,
-    path: "/",
-    sameSite: "Lax",
-    secure: new URL(c.req.url).protocol === "https:",
-  });
-
-  if (c.req.header("HX-Request")) {
-    c.header("HX-Redirect", "/app");
-    return c.body(null, 204);
+  if (!user) {
+    return c.html("credential error", 401);
   }
 
-  return c.redirect("/app");
-};
-
-app.post("/signin", signinEmail);
+  return signInAndRedirect(c, user.id);
+});
 
 app.post("/signout", (c) => {
+  if (!isHtmxRequest(c)) {
+    return c.text("HTMX request required", 400);
+  }
+
   const token = getCookie(c, "session");
 
   if (token) {
     const [sessionId] = token.split(".");
+
     if (sessionId) {
       deleteSession(sessionId);
     }
   }
 
-  deleteCookie(c, "session", {
-    path: "/",
-  });
+  clearSessionCookie(c);
 
-  if (c.req.header("HX-Request")) {
-    c.header("HX-Redirect", "/");
-    return c.body(null, 204);
-  }
-
-  return c.redirect("/");
+  c.header("HX-Redirect", "/");
+  return c.body(null, 204);
 });
 
-// HTMX Endpoint for adding a todo
 app.post("/add", async (c) => {
-  const body = await c.req.parseBody();
-  const text = body["todo"] as string;
-  const newTodo = createTodo(text);
+  const session = getAuthenticatedSession(c);
 
-  // Return only the new fragment to be swapped into the list
+  if (!session) {
+    return redirectToSignin(c);
+  }
+
+  if (!isHtmxRequest(c)) {
+    return c.text("HTMX request required", 400);
+  }
+
+  const body = await c.req.parseBody();
+  const text = parseTodoText(body["todo"]);
+
+  if (!text) {
+    return c.text("Todo text is required", 400);
+  }
+
+  const newTodo = createTodo(session.userId, text);
+
   return c.html(TodoItem({ todo: newTodo }));
 });
 
-const signupEmail = async (c: Context) => {
-  const body = await c.req.parseBody();
-  const email = body["email"];
-  const password = body["password"];
+app.post("/auth/signup-email", async (c) => {
+  const credentials = await parseCredentials(c, "signup");
 
-  if (typeof email !== "string" || typeof password !== "string") {
-    return c.html("invalid signup details", 400);
+  if (!credentials.ok) {
+    return credentials.response;
   }
 
-  const user = createUser(email, password);
-  if (user.id === "") return c.html("user exists error", 409);
+  const user = addUser(credentials.value.email, credentials.value.password);
 
-  const session = await createSession(user.id);
+  if (!user) {
+    return c.html("user exists error", 409);
+  }
 
-  setCookie(c, "session", session.token, {
+  return signInAndRedirect(c, user.id);
+});
+
+function getAuthenticatedSession(c: Context): Session | null {
+  const token = getCookie(c, "session");
+
+  if (!token) {
+    return null;
+  }
+
+  return validateSessionToken(token);
+}
+
+function setSessionCookie(c: Context, token: string) {
+  setCookie(c, "session", token, {
     httpOnly: true,
     path: "/",
     sameSite: "Lax",
     secure: new URL(c.req.url).protocol === "https:",
   });
+}
 
-  if (c.req.header("HX-Request")) {
+function clearSessionCookie(c: Context) {
+  deleteCookie(c, "session", {
+    path: "/",
+  });
+}
+
+function redirectToSignin(c: Context) {
+  if (isHtmxRequest(c)) {
+    c.header("HX-Redirect", "/");
+    return c.body(null, 401);
+  }
+
+  return c.redirect("/");
+}
+
+function signInAndRedirect(c: Context, userId: string) {
+  const session = createSession(userId);
+  setSessionCookie(c, session.token);
+
+  if (isHtmxRequest(c)) {
     c.header("HX-Redirect", "/app");
     return c.body(null, 204);
   }
 
   return c.redirect("/app");
-};
-
-app.post("/auth/signup-email", signupEmail);
-app.post("/auth/sighup-email", signupEmail);
-
-// console.log(findUserByEmail("a@gmail.com"));
-
-function createUser(email: string, password: string) {
-  const user = findUserByEmail(email);
-  if (user) {
-    return { id: "", email: "" };
-  }
-
-  const res = addUser(email, password);
-  return res;
 }
 
+async function parseCredentials(
+  c: Context,
+  action: "signin" | "signup",
+): Promise<{ ok: true; value: Credentials } | { ok: false; response: Response }> {
+  const body = await c.req.parseBody();
+  const rawEmail = body["email"];
+  const rawPassword = body["password"];
+
+  if (typeof rawEmail !== "string" || typeof rawPassword !== "string") {
+    return { ok: false, response: c.html(`invalid ${action} details`, 400) };
+  }
+
+  const email = rawEmail.trim().toLowerCase();
+  const password = rawPassword.trim();
+
+  if (!isValidEmail(email) || password.length < 8 || password.length > 256) {
+    return { ok: false, response: c.html(`invalid ${action} details`, 400) };
+  }
+
+  return { ok: true, value: { email, password } };
+}
+
+function isValidEmail(email: string) {
+  return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function parseTodoText(value: FormDataEntryValue | FormDataEntryValue[] | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const text = value.trim();
+
+  if (text.length === 0 || text.length > 500) {
+    return null;
+  }
+
+  return text;
+}
+
+function parseTodoId(value: string): number | null {
+  if (!/^[1-9]\d*$/.test(value)) {
+    return null;
+  }
+
+  const id = Number(value);
+
+  if (!Number.isSafeInteger(id)) {
+    return null;
+  }
+
+  return id;
+}
+
+function normalizeTodoFilter(filter?: string): "done" | "undone" | undefined {
+  if (filter === "done" || filter === "undone") {
+    return filter;
+  }
+
+  return undefined;
+}
+
+function isHtmxRequest(c: Context) {
+  return c.req.header("HX-Request") === "true";
+}
 
 export default app;
