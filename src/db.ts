@@ -12,6 +12,19 @@ type TodoRow = {
   is_done: number;
 };
 
+type User = {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: number;
+}
+
+type UserRow = {
+  id: string;
+  email: string;
+  password_hash: string;
+  created_at: number;
+}
 const db = new Database("todos.db", { create: true });
 
 db.run(await Bun.file("schema.sql").text());
@@ -113,7 +126,7 @@ function generateSecureRandomString(): string {
 }
 
 export async function createSession(userId: string) {
-	const now = new Date();
+	const now = Math.floor(Date.now() / 1000);
 
 	const id = generateSecureRandomString();
 	const secret = generateSecureRandomString();
@@ -130,7 +143,7 @@ export async function createSession(userId: string) {
 
   const result = db
     .query("INSERT INTO sessions (id, user_id, secret_hash, created_at) VALUES (?, ?, ?, ?)")
-    .run(id, userId, secretHash, Math.floor(session.createdAt.getTime() / 1000));
+    .run(id, userId, secretHash, session.createdAt);
 
 	return session;
 }
@@ -139,9 +152,108 @@ type Session = {
   id: string
   userId: string
   secretHash:string
-  createdAt: Date
+  createdAt: number
+}
+
+type SessionRow = {
+  id: string
+  user_id: string
+  secret_hash:string
+  created_at: number
 }
 
 type SessionWithToken = Session & {
   token:string
+}
+
+const toSession = (row: SessionRow): Session => ({
+  id: row.id,
+  userId: row.user_id,
+  secretHash: row.secret_hash,
+  createdAt: row.created_at
+});
+
+const sessionExpiresInSeconds = 60 * 60 * 24;
+
+export function getSession(sessionId: string): Session | null {
+	const now = new Date();
+
+  const result = db
+    .query<SessionRow, [string]>("SELECT id, user_id, secret_hash, created_at FROM sessions WHERE id = ?")
+    .get(sessionId)
+
+	if (!result) {
+		return null;
+	}
+
+	const session: Session = {
+		id: result.id,
+    userId: result.user_id,
+		secretHash: result.secret_hash,
+		createdAt: result.created_at
+	};
+
+	// Check expiration
+	if (Math.floor(now.getTime() / 1000) - session.createdAt >= sessionExpiresInSeconds) {
+		deleteSession(sessionId);
+		return null;
+	}
+
+	return session;
+}
+
+export function deleteSession(sessionId: string) {
+  db.query("DELETE FROM sessions WHERE id = ?").run(sessionId);
+}
+
+export function validateSessionToken(token: string): Session | null {
+	const tokenParts = token.split(".");
+	if (tokenParts.length !== 2) {
+		return null;
+	}
+	const sessionId = tokenParts[0];
+	const sessionSecret = tokenParts[1];
+
+	const session = getSession(sessionId);
+	if (!session) {
+		return null;
+	}
+
+	const validSecret = Bun.password.verifySync(sessionSecret, session.secretHash);
+	// const validSecret = constantTimeEqual(tokenSecretHash, session.secretHash);
+	if (!validSecret) {
+		return null;
+	}
+
+	return session;
+}
+
+function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
+	if (a.byteLength !== b.byteLength) {
+		return false;
+	}
+	let c = 0;
+	for (let i = 0; i < a.byteLength; i++) {
+		c |= a[i] ^ b[i];
+	}
+	return c === 0;
+}
+
+export function checkEmailPassword(email: string, password: string): User | null {
+  const row = db
+    .query<UserRow, [string]>("SELECT id, email, password_hash, created_at FROM users WHERE email = ?")
+    .get(email);
+  if (!row) return null;
+
+	const validPassword = Bun.password.verifySync(password, row.password_hash);
+	if (!validPassword) {
+		return null;
+	}
+
+  return {
+    id: row.id,
+    email: row.email,
+    passwordHash: row.password_hash,
+    createdAt: row.created_at,
+  };
 }
