@@ -28,6 +28,7 @@ type UserRow = {
 export type Session = {
   id: string;
   userId: string;
+  userEmail: string;
   secretHash: string;
   createdAt: number;
 };
@@ -35,11 +36,12 @@ export type Session = {
 type SessionRow = {
   id: string;
   user_id: string;
+  user_email: string;
   secret_hash: string;
   created_at: number;
 };
 
-type SessionWithToken = Session & {
+type CreatedSession = Omit<Session, "userEmail"> & {
   token: string;
 };
 
@@ -68,6 +70,7 @@ const toUser = (row: UserRow): User => ({
 const toSession = (row: SessionRow): Session => ({
   id: row.id,
   userId: row.user_id,
+  userEmail: row.user_email,
   secretHash: row.secret_hash,
   createdAt: row.created_at,
 });
@@ -149,14 +152,14 @@ export const addUser = (email: string, password: string): User | null => {
   }
 };
 
-export function createSession(userId: string): SessionWithToken {
+export function createSession(userId: string): CreatedSession {
   const now = Math.floor(Date.now() / 1000);
   const id = generateSecureRandomString();
   const secret = generateSecureRandomString();
   const secretHash = Bun.password.hashSync(secret);
   const token = `${id}.${secret}`;
 
-  const session: SessionWithToken = {
+  const session: CreatedSession = {
     id,
     userId,
     secretHash,
@@ -178,7 +181,17 @@ const sessionExpiresInSeconds = 60 * 60 * 24;
 
 export function getSession(sessionId: string): Session | null {
   const row = db
-    .query<SessionRow, [string]>("SELECT id, user_id, secret_hash, created_at FROM sessions WHERE id = ?")
+    .query<SessionRow, [string]>(
+      `SELECT
+        sessions.id,
+        sessions.user_id,
+        users.email AS user_email,
+        sessions.secret_hash,
+        sessions.created_at
+      FROM sessions
+      JOIN users ON users.id = sessions.user_id
+      WHERE sessions.id = ?`,
+    )
     .get(sessionId);
 
   if (!row) {

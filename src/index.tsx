@@ -129,7 +129,7 @@ app.get("/app", (c) => {
   return c.html(
     <Layout>
       <h1 class="text-2xl font-bold mb-4">My Todos</h1>
-      <h2>user: {session.userId}</h2>
+      <h2>user: {session.userEmail}</h2>
       <button hx-post="/signout">sign out</button>
       <form
         hx-post="/add"
