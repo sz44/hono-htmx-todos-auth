@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { getCookie } from "hono/cookie";
 import {
   addGoogleUser,
@@ -17,6 +17,8 @@ import {
   getGoogleOAuthCookies,
   parseGoogleIdToken,
   setGoogleOAuthCookies,
+  verifyGoogleIdToken,
+  type GoogleIdTokenClaims,
 } from "../lib/google-oauth";
 import { isHtmxRequest } from "../lib/htmx";
 import { parseCredentials } from "../lib/validation";
@@ -24,9 +26,9 @@ import { SignInPage, SignUpPage } from "../views/auth";
 
 export const authRoutes = new Hono();
 
-authRoutes.get("/", (c) => c.html(<SignInPage />));
+authRoutes.get("/", (c) => c.html(<SignInPage {...getGoogleSignInProps(c)} />));
 
-authRoutes.get("/signup-email", (c) => c.html(<SignUpPage />));
+authRoutes.get("/signup-email", (c) => c.html(<SignUpPage {...getGoogleSignInProps(c)} />));
 
 authRoutes.get("/auth/google", (c) => {
   const google = createGoogleClient(c);
@@ -63,6 +65,43 @@ authRoutes.get("/auth/google/callback", async (c) => {
   const tokens = await google.validateAuthorizationCode(code, stored.codeVerifier);
   const claims = parseGoogleIdToken(tokens.idToken());
 
+  return signInWithGoogleClaims(c, claims);
+});
+
+authRoutes.post("/auth/google/credential", async (c) => {
+  const body = await c.req.parseBody();
+  const credential = body["credential"];
+  const bodyCsrfToken = body["g_csrf_token"];
+  const cookieCsrfToken = getCookie(c, "g_csrf_token");
+
+  if (
+    typeof credential !== "string" ||
+    typeof bodyCsrfToken !== "string" ||
+    !cookieCsrfToken ||
+    bodyCsrfToken !== cookieCsrfToken
+  ) {
+    return c.text("Invalid Google sign-in request", 400);
+  }
+
+  let claims: GoogleIdTokenClaims | null;
+
+  try {
+    claims = await verifyGoogleIdToken(credential);
+  } catch {
+    return c.text("Unable to verify Google sign-in", 502);
+  }
+
+  return signInWithGoogleClaims(c, claims);
+});
+
+function getGoogleSignInProps(c: Context) {
+  return {
+    googleClientId: Bun.env.GOOGLE_CLIENT_ID,
+    googleLoginUri: `${new URL(c.req.url).origin}/auth/google/credential`,
+  };
+}
+
+function signInWithGoogleClaims(c: Context, claims: GoogleIdTokenClaims | null) {
   if (!claims || !claims.emailVerified) {
     return c.text("Google account email must be verified", 400);
   }
@@ -96,7 +135,7 @@ authRoutes.get("/auth/google/callback", async (c) => {
   }
 
   return signInAndRedirect(c, user.id);
-});
+}
 
 authRoutes.post("/signin", async (c) => {
   const credentials = await parseCredentials(c, "signin");
