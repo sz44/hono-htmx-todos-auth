@@ -10,6 +10,11 @@ export const SignInPage = () => (
         continue
       </button>
     </form>
+    <div class="my-4">
+      <a href="/auth/google" class="inline-block border p-2">
+        Continue with Google
+      </a>
+    </div>
     <div>
       <span>
         no account? <a href="/signup-email">sign up</a>
@@ -28,6 +33,11 @@ export const SignUpPage = () => (
         continue
       </button>
     </form>
+    <div class="my-4">
+      <a href="/auth/google" class="inline-block border p-2">
+        Continue with Google
+      </a>
+    </div>
     <div>
       <span>
         have an account? <a href="/">sign in</a>

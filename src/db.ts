@@ -14,14 +14,16 @@ type TodoRow = {
 
 export type User = {
   id: string;
+  googleId: string | null;
   email: string;
   createdAt: number;
 };
 
 type UserRow = {
   id: string;
+  google_id: string | null;
   email: string;
-  password_hash: string;
+  password_hash: string | null;
   created_at: number;
 };
 
@@ -45,15 +47,10 @@ type CreatedSession = Omit<Session, "userEmail"> & {
   token: string;
 };
 
-type TableColumnRow = {
-  name: string;
-};
-
 const db = new Database("todos.db", { create: true });
 
 db.run("PRAGMA foreign_keys = ON");
 db.run(await Bun.file("schema.sql").text());
-migrateExistingTodosTable();
 
 const toTodo = (row: TodoRow): Todo => ({
   id: row.id,
@@ -63,6 +60,7 @@ const toTodo = (row: TodoRow): Todo => ({
 
 const toUser = (row: UserRow): User => ({
   id: row.id,
+  googleId: row.google_id,
   email: row.email,
   createdAt: row.created_at,
 });
@@ -134,7 +132,7 @@ export const addUser = (email: string, password: string): User | null => {
   try {
     const row = db
       .query<UserRow, [string, string, string]>(
-        "INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?) RETURNING id, email, password_hash, created_at",
+        "INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?) RETURNING id, google_id, email, password_hash, created_at",
       )
       .get(id, email, hash);
 
@@ -151,6 +149,70 @@ export const addUser = (email: string, password: string): User | null => {
     throw error;
   }
 };
+
+export function getUserByGoogleId(googleId: string): User | null {
+  const row = db
+    .query<UserRow, [string]>(
+      "SELECT id, google_id, email, password_hash, created_at FROM users WHERE google_id = ?",
+    )
+    .get(googleId);
+
+  return row ? toUser(row) : null;
+}
+
+export function getUserByEmail(email: string): User | null {
+  const row = db
+    .query<UserRow, [string]>("SELECT id, google_id, email, password_hash, created_at FROM users WHERE email = ?")
+    .get(email);
+
+  return row ? toUser(row) : null;
+}
+
+export function addGoogleUser(googleId: string, email: string): User | null {
+  const id = generateSecureRandomString();
+
+  try {
+    const row = db
+      .query<UserRow, [string, string, string]>(
+        "INSERT INTO users (id, google_id, email) VALUES (?, ?, ?) RETURNING id, google_id, email, password_hash, created_at",
+      )
+      .get(id, googleId, email);
+
+    if (!row) {
+      throw new Error("Failed to create Google user");
+    }
+
+    return toUser(row);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("UNIQUE constraint failed: users.email") ||
+        error.message.includes("UNIQUE constraint failed: users.google_id"))
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export function linkGoogleUser(userId: string, googleId: string): User | null {
+  try {
+    const row = db
+      .query<UserRow, [string, string]>(
+        "UPDATE users SET google_id = ? WHERE id = ? RETURNING id, google_id, email, password_hash, created_at",
+      )
+      .get(googleId, userId);
+
+    return row ? toUser(row) : null;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("UNIQUE constraint failed: users.google_id")) {
+      return null;
+    }
+
+    throw error;
+  }
+}
 
 export function createSession(userId: string): CreatedSession {
   const now = Math.floor(Date.now() / 1000);
@@ -238,10 +300,10 @@ export function validateSessionToken(token: string): Session | null {
 
 export function checkEmailPassword(email: string, password: string): User | null {
   const row = db
-    .query<UserRow, [string]>("SELECT id, email, password_hash, created_at FROM users WHERE email = ?")
+    .query<UserRow, [string]>("SELECT id, google_id, email, password_hash, created_at FROM users WHERE email = ?")
     .get(email);
 
-  if (!row) {
+  if (!row || !row.password_hash) {
     return null;
   }
 
@@ -252,15 +314,6 @@ export function checkEmailPassword(email: string, password: string): User | null
   }
 
   return toUser(row);
-}
-
-function migrateExistingTodosTable() {
-  const columns = db.query<TableColumnRow, []>("PRAGMA table_info(todos)").all();
-  const hasUserId = columns.some((column) => column.name === "user_id");
-
-  if (!hasUserId) {
-    db.run("ALTER TABLE todos ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
-  }
 }
 
 function generateSecureRandomString(): string {

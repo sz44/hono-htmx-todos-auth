@@ -1,8 +1,10 @@
 CREATE TABLE IF NOT EXISTS users(
   id TEXT NOT NULL PRIMARY KEY,
+  google_id TEXT UNIQUE,
   email TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  password_hash TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  CHECK (password_hash IS NOT NULL OR google_id IS NOT NULL)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS todos (

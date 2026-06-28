@@ -1,6 +1,9 @@
 # deps
 node_modules/
 
+# env
+.env
+
 # local database
 *.sqlite
 *.sqlite-shm

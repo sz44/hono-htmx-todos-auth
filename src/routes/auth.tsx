@@ -1,7 +1,23 @@
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
-import { addUser, checkEmailPassword, deleteSession } from "../db";
+import {
+  addGoogleUser,
+  addUser,
+  checkEmailPassword,
+  deleteSession,
+  getUserByEmail,
+  getUserByGoogleId,
+  linkGoogleUser,
+} from "../db";
 import { clearSessionCookie, signInAndRedirect } from "../lib/auth";
+import {
+  clearGoogleOAuthCookies,
+  createGoogleClient,
+  createGoogleOAuthState,
+  getGoogleOAuthCookies,
+  parseGoogleIdToken,
+  setGoogleOAuthCookies,
+} from "../lib/google-oauth";
 import { isHtmxRequest } from "../lib/htmx";
 import { parseCredentials } from "../lib/validation";
 import { SignInPage, SignUpPage } from "../views/auth";
@@ -11,6 +27,76 @@ export const authRoutes = new Hono();
 authRoutes.get("/", (c) => c.html(<SignInPage />));
 
 authRoutes.get("/signup-email", (c) => c.html(<SignUpPage />));
+
+authRoutes.get("/auth/google", (c) => {
+  const google = createGoogleClient(c);
+
+  if (!google) {
+    return c.text("Google OAuth is not configured", 500);
+  }
+
+  const { state, codeVerifier } = createGoogleOAuthState();
+  const url = google.createAuthorizationURL(state, codeVerifier, ["openid", "profile", "email"]);
+
+  setGoogleOAuthCookies(c, state, codeVerifier);
+
+  return c.redirect(url.toString());
+});
+
+authRoutes.get("/auth/google/callback", async (c) => {
+  const google = createGoogleClient(c);
+
+  if (!google) {
+    return c.text("Google OAuth is not configured", 500);
+  }
+
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  const stored = getGoogleOAuthCookies(c);
+
+  clearGoogleOAuthCookies(c);
+
+  if (!code || !state || !stored.state || !stored.codeVerifier || state !== stored.state) {
+    return c.text("Invalid Google OAuth request", 400);
+  }
+
+  const tokens = await google.validateAuthorizationCode(code, stored.codeVerifier);
+  const claims = parseGoogleIdToken(tokens.idToken());
+
+  if (!claims || !claims.emailVerified) {
+    return c.text("Google account email must be verified", 400);
+  }
+
+  const googleUser = getUserByGoogleId(claims.sub);
+
+  if (googleUser) {
+    return signInAndRedirect(c, googleUser.id);
+  }
+
+  const existingUser = getUserByEmail(claims.email);
+
+  if (existingUser) {
+    if (existingUser.googleId) {
+      return c.text("Email is already linked to another Google account", 409);
+    }
+
+    const linkedUser = linkGoogleUser(existingUser.id, claims.sub);
+
+    if (!linkedUser) {
+      return c.text("Unable to link Google account", 409);
+    }
+
+    return signInAndRedirect(c, linkedUser.id);
+  }
+
+  const user = addGoogleUser(claims.sub, claims.email);
+
+  if (!user) {
+    return c.text("Unable to create Google user", 409);
+  }
+
+  return signInAndRedirect(c, user.id);
+});
 
 authRoutes.post("/signin", async (c) => {
   const credentials = await parseCredentials(c, "signin");
